@@ -1,0 +1,7 @@
+cleverhans==4.0.0
+foolbox==3.3.4
+h5py==3.11.0
+keras==3.3.3
+numpy==1.26.4
+prettytable==3.10.0
+tensorflow==2.16.1
