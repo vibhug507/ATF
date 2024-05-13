@@ -1,11 +1,12 @@
 import time
 from atf import ATF
 
-atf = ATF('mobilenet_v3.h5', 'preprocessed_images.h5', 'output_classes.h5', ['fgsm', 'sp_noise'])
 start_time = time.time()
-print("main")
-results = atf.run(['fgsm', 'sp_noise'])
+
+atf = ATF('model.h5', 'input.h5', 'output.h5', ['fgsm', 'sp_noise', 'pgd', 'carlini_wagner', 'deepfool'])
+results = atf.run(['fgsm', 'sp_noise', 'pgd', 'carlini_wagner', 'deepfool'])
 atf.generate_results_pdf()
+
 end_time = time.time()
 print("Elapsed Time in second:", end_time - start_time)
 print(atf.print_results())

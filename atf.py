@@ -11,8 +11,12 @@ from prettytable import PrettyTable
 from keras import backend as K
 import keras
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph, Image
 from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import defaultdict
 
 attacks = ['fgsm', 'pgd', 'carlini_wagner', 'deepfool', 'sp_noise']
 attack_metrics = {'fgsm': 'eps', 'pgd': 'eps', 'carlini_wagner': 'confidence', 
@@ -49,6 +53,7 @@ class ATF:
         self.__original_accuracy = calculate_accuracy(self.__Y, self.__original_output)
         self.__original_class_accuracies = calculate_class_based_accuracy(self.__Y, self.__original_output)
 
+        self.__most_affected_classes = []
         self.__results = {'original': {'accuracy': self.__original_accuracy, 
                                      'class_accuracies': self.__original_class_accuracies}}
         
@@ -68,6 +73,26 @@ class ATF:
                     self.__attack_methods[attack]()
         return self.__results
     
+    def get_most_affected_classes(self, limit = 5):
+        class_accuracies_sum = defaultdict(float)
+        class_accuracies_cnt = defaultdict(int)
+        for attack, results in self.__results.items():
+            if attack == 'original':
+                continue
+            for acc_dict in results['class_accuracies']:
+                print(acc_dict)
+                for label, acc in acc_dict.items():
+                    class_accuracies_sum[label] += acc
+                    class_accuracies_cnt[label] += 1
+        accuracies = []
+        for label, acc_sum in class_accuracies_sum.items():
+            accuracies.append((acc_sum / class_accuracies_cnt[label], label))
+        accuracies = sorted(accuracies, key=lambda x: (x[0], x[1]))
+        self.__most_affected_classes = []
+        for i in range(min(limit, len(accuracies))):
+            self.__most_affected_classes.append(accuracies[i][1])
+        return self.__most_affected_classes
+
     def get_results(self):
         return self.__results
         
@@ -117,30 +142,24 @@ class ATF:
     
     def generate_results_pdf(self, filename='atf_results.pdf'):
         doc = SimpleDocTemplate(filename, pagesize=letter)
+        styles = getSampleStyleSheet()
         elements = []
 
-        # Original Accuracy Table
-        original_accuracy_data = [['Original Accuracy', f"{self.__original_accuracy:.2f}%"]]
-        original_accuracy_table = Table(original_accuracy_data, colWidths=[200, 100])
-        elements.append(original_accuracy_table)
+        # Add heading
+        heading_style = ParagraphStyle(name='Heading1', fontName='Helvetica-Bold', fontSize=16, alignment=1, spaceAfter=12)
+        heading_text = "<u>ATF Results Analysis</u>"
+        heading = Paragraph(heading_text, heading_style)
+        elements.append(heading)
         elements.append(Spacer(1, 12))
 
-        # Original Class Accuracies Table
-        original_class_accuracy_data = [['Class', 'Accuracy']]
-        for label, acc in self.__original_class_accuracies.items():
-            original_class_accuracy_data.append([f"Class {label}", f"{acc:.2f}%"])
-        original_class_accuracy_table = Table(original_class_accuracy_data, colWidths=[100, 100])
-        elements.append(original_class_accuracy_table)
-        elements.append(Spacer(1, 12))
-
-        comparison_data = [['Attack', 'Original Accuracy', 'Min Accuracy', 'Attack Metric']]
+        # Comparison Table
+        comparison_data = [['Attack', 'Avg Accuracy', 'Attack Metric']]
         for attack, results in self.__results.items():
             if attack == 'original':
                 continue
-            original_acc = self.__original_accuracy
             avg_acc = np.mean(results['accuracy'])
-            attack_metric = results['attack_metric']
-            comparison_data.append([attack, f"{original_acc:.2f}%", f"{avg_acc:.2f}%", attack_metric])
+            attack_metric = attack_metrics.get(attack, 'N/A')
+            comparison_data.append([attack, f"{avg_acc:.2f}%", attack_metric])
         comparison_table = Table(comparison_data, colWidths=[100, 100, 100, 200])
         comparison_table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -151,11 +170,27 @@ class ATF:
                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
         elements.append(comparison_table)
 
-        # Attack Results Tables
+        # Add most affected classes
+        most_affected_classes = self.get_most_affected_classes()
+        most_affected_classes_text = f"Most Affected Classes: {', '.join(str(label) for label in most_affected_classes)}"
+        most_affected_classes_paragraph = Paragraph(most_affected_classes_text, styles['Normal'])
+        elements.append(most_affected_classes_paragraph)
+        elements.append(Spacer(1, 12))
+
+        # Add attack results
         for attack, results in self.__results.items():
             if attack == 'original':
                 continue
-            attack_data = [['Attack', 'Metric', 'Value']]
+            attack_title = Paragraph(f"<b>Attack: {attack.capitalize()}</b>", styles['Heading2'])
+            elements.append(attack_title)
+            elements.append(Spacer(1, 12))
+
+            attack_accuracy_text = f"Average Accuracy after Attack: {np.mean(results['accuracy']):.2f}%"
+            attack_accuracy = Paragraph(attack_accuracy_text, styles['Normal'])
+            elements.append(attack_accuracy)
+            elements.append(Spacer(1, 12))
+
+            attack_data = [['Attack', 'Metric', 'Set of Values']]
             for metric, value in results.items():
                 if metric == 'accuracy' or metric == 'class_accuracies':
                     continue
@@ -169,6 +204,40 @@ class ATF:
                                                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                                                ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
             elements.append(attack_table)
+            elements.append(Spacer(1, 12))
+
+            attack_data = [['Metric Vaue', 'Accuracy']]
+            attack_metric = attack_metrics[attack]
+            for metric, acc in zip(results[attack_metric], results['accuracy']):
+                attack_data.append([metric, f"{acc:.2f}%"])
+            attack_table = Table(attack_data, colWidths=[100, 100])
+            attack_table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                                            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                                            ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
+            elements.append(attack_table)
+            elements.append(Spacer(1, 12))
+
+            # Graph for accuracies vs metric values
+            sorted_metrics = sorted(results[attack_metric])
+            sorted_accuracies = [acc for _, acc in sorted(zip(results[attack_metric], results['accuracy']))]
+            plt.figure(figsize=(8, 6))
+            plt.plot(sorted_metrics, sorted_accuracies, marker='o')
+            plt.xlabel(attack_metric.capitalize())
+            plt.ylabel('Accuracy (%)')
+            plt.title(f'{attack.capitalize()} Attack: Accuracies vs {attack_metric.capitalize()}')
+            plt.grid(True)
+            plt.tight_layout()
+            graph_filename = f'{attack}_graph.png'
+            plt.savefig(graph_filename)
+            plt.close()
+
+            # Add the graph to PDF
+            graph_image = Image(graph_filename, width=400, height=300)
+            elements.append(graph_image)
             elements.append(Spacer(1, 12))
 
         # Build PDF
